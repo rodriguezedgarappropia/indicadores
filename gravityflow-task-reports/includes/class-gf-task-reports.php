@@ -3,10 +3,18 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+/**
+ * Clase principal para el manejo de reportes de tareas de GravityFlow
+ * Gestiona la visualización y procesamiento de estadísticas de workflows
+ */
 class GF_Task_Reports {
     private static $instance = null;
     private $nonce;
     
+    /**
+     * Constructor de la clase
+     * Inicializa los hooks necesarios y genera el nonce de seguridad
+     */
     private function __construct() {
         add_action('init', array($this, 'init'));
         add_shortcode('gravityflow_report', array($this, 'render_report'));
@@ -21,6 +29,10 @@ class GF_Task_Reports {
         error_log('Nonce generado: ' . $this->nonce);
     }
     
+    /**
+     * Implementa el patrón Singleton para asegurar una única instancia
+     * @return GF_Task_Reports Instancia única de la clase
+     */
     public static function get_instance() {
         if (null === self::$instance) {
             self::$instance = new self();
@@ -28,11 +40,18 @@ class GF_Task_Reports {
         return self::$instance;
     }
     
+    /**
+     * Inicializa el plugin y carga las traducciones
+     */
     public function init() {
         // Cargar traducciones
         load_plugin_textdomain('gf-task-reports', false, dirname(plugin_basename(__FILE__)) . '/languages');
     }
 
+    /**
+     * Carga los archivos CSS y JavaScript necesarios para los reportes
+     * Evita cargar los assets múltiples veces usando un flag estático
+     */
     private function enqueue_report_assets() {
         static $assets_loaded = false;
 
@@ -71,6 +90,11 @@ class GF_Task_Reports {
         $assets_loaded = true;
     }
     
+    /**
+     * Renderiza el formulario de reportes con filtros y contenedor de gráficos
+     * @param array $atts Atributos del shortcode
+     * @return string HTML del formulario de reportes
+     */
     public function render_report($atts) {
         // Verificar si GravityFlow está activo
         if (!class_exists('Gravity_Flow')) {
@@ -89,10 +113,12 @@ class GF_Task_Reports {
         
         // Filtro de período
         $output .= '<select id="period-filter" class="gravityflow-filter">
-            <option value="12">Últimos 12 meses</option>
-            <option value="6">Últimos 6 meses</option>
-            <option value="3">Últimos 3 meses</option>
+            <option value="today">Hoy</option>
+            <option value="last_week">Semana anterior</option>
             <option value="1">Último mes</option>
+            <option value="3">Últimos 3 meses</option>
+            <option value="6">Últimos 6 meses</option>
+            <option value="12">Últimos 12 meses</option>
         </select>';
         
         // Filtro de formulario
@@ -103,10 +129,11 @@ class GF_Task_Reports {
         }
         $output .= '</select>';
         
-        // Filtro de tipo (reemplaza el filtro de usuario)
+        // Filtro de tipo
         $output .= '<select id="type-filter" class="gravityflow-filter">
             <option value="">Seleccione tipo</option>
             <option value="encargado">Encargado</option>
+            <option value="paso">Paso</option>
         </select>';
         
         $output .= '</div>';
@@ -132,38 +159,52 @@ class GF_Task_Reports {
         return $output;
     }
 
-    public function handle_workflow_stats() {
-        error_log('=== EJECUTANDO handle_workflow_stats ===');
+    /**
+     * Construye la condición SQL para filtrar por fecha según el período seleccionado
+     * @param string $period Período seleccionado ('today', 'last_week', '1', '3', '6', '12', 'all')
+     * @return string Condición SQL para filtrar por fecha
+     */
+    private function build_date_condition($period) {
+        // Si no hay período seleccionado, no aplicar filtro
+        if ($period === 'all') {
+            return '';
+        }
         
-        if (!isset($_POST['nonce']) || !wp_verify_nonce($_POST['nonce'], 'workflow_stats_nonce')) {
-            wp_send_json_error('Nonce inválido', 403);
-            return;
+        // Para el día actual
+        if ($period === 'today') {
+            return " AND DATE(date_created) = CURDATE()";
         }
-
-        $period = isset($_POST['period']) ? intval($_POST['period']) : 12;
-        $form_id = isset($_POST['form_id']) ? intval($_POST['form_id']) : 0;
-        $type = isset($_POST['type']) ? sanitize_text_field($_POST['type']) : '';
-
-        if (empty($form_id) || $type !== 'encargado') {
-            wp_send_json_error('Parámetros inválidos');
-            return;
+        
+        // Para la semana anterior completa (de lunes a domingo)
+        if ($period === 'last_week') {
+            return " AND YEARWEEK(date_created, 1) = YEARWEEK(CURDATE() - INTERVAL 1 WEEK, 1)";
         }
-
-        // Obtener estadísticas para todos los usuarios del formulario
-        $stats = $this->get_workflow_stats($period, $form_id);
-        wp_send_json_success($stats);
+        
+        // Para períodos en meses (1, 3, 6, 12)
+        if (is_numeric($period)) {
+            $date_limit = date('Y-m-d H:i:s', strtotime("-{$period} months"));
+            return " AND date_created >= '{$date_limit}'";
+        }
+        
+        // Si llega aquí, es un período no válido
+        return '';
     }
 
-    private function get_workflow_stats($period = 12, $form_id = '') {
+    /**
+     * Obtiene estadísticas de workflow por usuario asignado
+     * @param string $period Período para filtrar
+     * @param int $form_id ID del formulario
+     * @return array Estadísticas de tareas completadas y aprobadas por usuario
+     */
+    private function get_workflow_stats($period, $form_id) {
+        error_log('=== INICIO get_workflow_stats ===');
+        error_log("Parámetros recibidos: period={$period}, form_id={$form_id}");
+        
         global $wpdb;
         
-        if (empty($form_id)) {
-            return array();
-        }
-
-        $date_limit = date('Y-m-d H:i:s', strtotime("-{$period} months"));
-
-        // Consulta para obtener estadísticas de todos los usuarios que han interactuado con el formulario
+        $date_condition = $this->build_date_condition($period);
+        error_log("Condición de fecha generada: {$date_condition}");
+        
         $query = $wpdb->prepare("
             SELECT 
                 al.assignee_id as user_id,
@@ -174,24 +215,174 @@ class GF_Task_Reports {
             FROM {$wpdb->prefix}gravityflow_activity_log al
             LEFT JOIN {$wpdb->users} u ON al.assignee_id = u.ID
             WHERE 
-                al.date_created >= %s
-                AND al.log_value IN ('complete', 'approved')
+                al.log_value IN ('complete', 'approved')
                 AND al.assignee_type = 'user_id'
                 AND al.form_id = %d
+                {$date_condition}
             GROUP BY 
                 al.assignee_id,
                 u.display_name
             ORDER BY 
                 u.display_name
-        ", $date_limit, $form_id);
-
+        ", $form_id);
+        
+        error_log("Query a ejecutar: {$query}");
+        
         $results = $wpdb->get_results($query);
-
+        
         if ($wpdb->last_error) {
             error_log('Error en la consulta SQL: ' . $wpdb->last_error);
             return array();
         }
-
+        
+        error_log('Número de resultados obtenidos: ' . count($results));
+        error_log('Resultados: ' . print_r($results, true));
+        error_log('=== FIN get_workflow_stats ===');
+        
         return $results;
+    }
+
+    /**
+     * Obtiene estadísticas por paso del workflow
+     * @param int $form_id ID del formulario
+     * @param string $period Período para filtrar
+     * @return array Estadísticas de tareas completadas y duración promedio por paso
+     */
+    private function get_step_stats($form_id, $period) {
+        error_log('=== INICIO get_step_stats ===');
+        error_log("Parámetros recibidos: form_id={$form_id}, period={$period}");
+        
+        global $wpdb;
+        
+        try {
+            // Verificar que la clase existe
+            if (!class_exists('Gravity_Flow_API')) {
+                error_log('Error: Gravity_Flow_API no existe');
+                throw new Exception('GravityFlow no está disponible');
+            }
+            
+            // Obtener los pasos directamente
+            error_log('Creando instancia de Gravity_Flow_API...');
+            $api = new Gravity_Flow_API($form_id);
+            $steps = $api->get_steps();
+            
+            if (empty($steps)) {
+                error_log('Error: No se encontraron pasos en el workflow');
+                throw new Exception('No hay pasos configurados en este workflow');
+            }
+            
+            error_log('Número de pasos encontrados: ' . count($steps));
+            
+            // Construir la condición de fecha
+            $date_condition = $this->build_date_condition($period);
+            error_log('Condición de fecha: ' . $date_condition);
+            
+            // Consulta para obtener estadísticas por paso
+            $query = $wpdb->prepare("
+                SELECT 
+                    feed_id,
+                    COUNT(*) as total_completed,
+                    AVG(duration / 3600) as avg_duration
+                FROM {$wpdb->prefix}gravityflow_activity_log
+                WHERE log_object = 'step'
+                AND log_event = 'ended'
+                AND log_value IN ('complete', 'approved')
+                AND form_id = %d
+                {$date_condition}
+                GROUP BY feed_id
+            ", $form_id);
+            
+            error_log('Ejecutando query: ' . $query);
+            $results = $wpdb->get_results($query);
+            
+            if ($wpdb->last_error) {
+                error_log('Error en la consulta SQL: ' . $wpdb->last_error);
+                throw new Exception('Error al consultar la base de datos: ' . $wpdb->last_error);
+            }
+            
+            error_log('Resultados de la consulta: ' . print_r($results, true));
+            
+            // Procesar los resultados
+            $stats = [];
+            foreach ($steps as $step) {
+                try {
+                    $step_id = $step->get_id();
+                    $step_name = $step->get_name();
+                    $step_type = $step->get_type();
+                    
+                    error_log("Procesando paso - ID: {$step_id}, Nombre: {$step_name}, Tipo: {$step_type}");
+                    
+                    $step_stats = null;
+                    foreach ($results as $result) {
+                        if ($result->feed_id == $step_id) {
+                            $step_stats = $result;
+                            break;
+                        }
+                    }
+                    
+                    $stats[] = array(
+                        'step_id' => $step_id,
+                        'display_name' => $step_name,
+                        'step_type' => $step_type,
+                        'total_completed' => $step_stats ? $step_stats->total_completed : 0,
+                        'avg_duration' => $step_stats ? round($step_stats->avg_duration, 1) : 0
+                    );
+                } catch (Exception $e) {
+                    error_log("Error procesando paso {$step_id}: " . $e->getMessage());
+                }
+            }
+            
+            error_log('Estadísticas procesadas: ' . print_r($stats, true));
+            return $stats;
+            
+        } catch (Exception $e) {
+            error_log('Error en get_step_stats: ' . $e->getMessage());
+            error_log('Stack trace: ' . $e->getTraceAsString());
+            throw $e;
+        }
+    }
+
+    /**
+     * Maneja las peticiones AJAX para obtener estadísticas
+     * Procesa los parámetros, obtiene las estadísticas y devuelve JSON
+     * @return void Envía respuesta JSON con las estadísticas
+     */
+    public function handle_workflow_stats() {
+        error_log('=== INICIO handle_workflow_stats ===');
+        error_log('POST recibido: ' . print_r($_POST, true));
+        
+        // Verificar nonce
+        check_ajax_referer('workflow_stats_nonce', 'nonce');
+        
+        $form_id = isset($_POST['form_id']) ? intval($_POST['form_id']) : 0;
+        $period = isset($_POST['period']) ? sanitize_text_field($_POST['period']) : 'all';
+        $type = isset($_POST['type']) ? sanitize_text_field($_POST['type']) : '';
+        
+        error_log("Parámetros procesados: form_id={$form_id}, period={$period}, type={$type}");
+        
+        if (!$form_id) {
+            error_log('Error: Formulario no válido');
+            wp_send_json_error('Formulario no válido');
+            return;
+        }
+        
+        try {
+            if ($type === 'paso') {
+                error_log('Obteniendo estadísticas de pasos');
+                $stats = $this->get_step_stats($form_id, $period);
+            } else {
+                error_log('Obteniendo estadísticas de workflow');
+                $stats = $this->get_workflow_stats($period, $form_id);
+            }
+            
+            error_log('Estadísticas obtenidas: ' . print_r($stats, true));
+            wp_send_json_success($stats);
+        } catch (Exception $e) {
+            error_log('Error en handle_workflow_stats: ' . $e->getMessage());
+            error_log('Stack trace: ' . $e->getTraceAsString());
+            wp_send_json_error($e->getMessage());
+        }
+        
+        error_log('=== FIN handle_workflow_stats ===');
     }
 } 

@@ -70,6 +70,7 @@ jQuery(document).ready(function($) {
     }
 
     function updateCharts(stats) {
+        currentStats = stats;  // Guardar los datos actuales
         jQuery('#loading-spinner').show();
         const container = jQuery('#charts_container');
         container.empty();
@@ -296,6 +297,154 @@ jQuery(document).ready(function($) {
         'user_input': '#34A853',
         'notification': '#FBBC05'
     };
+
+    // Función para exportar a Excel
+    function exportToExcel(stats, type) {
+        console.log('Iniciando exportación a Excel...');
+        console.log('XLSX object:', XLSX);
+        console.log('XLSX utils:', XLSX?.utils);
+        console.log('Tipo de datos a exportar:', type);
+        console.log('Datos a exportar:', stats);
+
+        // Verificar disponibilidad de XLSX
+        if (typeof XLSX === 'undefined') {
+            console.error('Error: La librería XLSX no está definida');
+            alert('Error: No se pudo cargar la librería de exportación');
+            return;
+        }
+
+        try {
+            // Preparar los datos según el tipo
+            let data = [];
+            if (type === 'paso') {
+                // Encabezados
+                data.push(['Paso', 'Tipo', 'Tareas Completadas', 'Duración Promedio (h)']);
+                
+                // Datos
+                stats.forEach(step => {
+                    data.push([
+                        step.display_name,
+                        step.step_type,
+                        parseInt(step.total_completed) || 0,
+                        parseFloat(step.avg_duration) || 0
+                    ]);
+                });
+            } else {
+                // Para tipo encargado
+                data.push(['Encargado', 'Tareas Completadas', 'Tareas Aprobadas', 'Duración Promedio (h)']);
+                stats.forEach(user => {
+                    data.push([
+                        user.display_name,
+                        parseInt(user.total_completed) || 0,
+                        parseInt(user.total_approved) || 0,
+                        parseFloat(user.avg_duration) || 0
+                    ]);
+                });
+            }
+
+            console.log('Datos preparados:', data);
+
+            // Crear una hoja de cálculo manualmente
+            const ws = {};
+            const range = {s: {c:0, r:0}, e: {c:data[0].length-1, r:data.length-1}};
+            
+            // Convertir el array 2D a formato de celda de XLSX
+            for(let R = 0; R < data.length; ++R) {
+                for(let C = 0; C < data[R].length; ++C) {
+                    const cell_ref = XLSX.utils.encode_cell({c:C, r:R});
+                    ws[cell_ref] = {
+                        v: data[R][C], // valor
+                        t: typeof data[R][C] === 'number' ? 'n' : 's' // tipo (número o string)
+                    };
+
+                    // Aplicar estilos a los encabezados (primera fila)
+                    if (R === 0) {
+                        ws[cell_ref].s = {
+                            font: {
+                                bold: true,
+                                color: { rgb: "FFFFFF" }
+                            },
+                            fill: {
+                                fgColor: { rgb: "4285F4" }
+                            },
+                            alignment: {
+                                horizontal: "center",
+                                vertical: "center"
+                            }
+                        };
+                    }
+                }
+            }
+            
+            // Establecer el rango usado y propiedades de columna
+            ws['!ref'] = XLSX.utils.encode_range(range);
+            
+            // Establecer ancho de columnas
+            ws['!cols'] = [];
+            for(let i = 0; i < data[0].length; i++) {
+                ws['!cols'].push({ wch: 20 }); // wch es el ancho en caracteres
+            }
+            
+            // Establecer alto de filas
+            ws['!rows'] = [{ hpt: 25 }]; // hpt es el alto en puntos para la primera fila
+
+            // Crear el workbook
+            const wb = {
+                SheetNames: ['Reporte'],
+                Sheets: { 'Reporte': ws }
+            };
+
+            console.log('Workbook creado:', wb);
+
+            // Generar el archivo
+            const wbout = XLSX.write(wb, {bookType:'xlsx', type:'binary'});
+
+            // Función para convertir string a ArrayBuffer
+            function s2ab(s) {
+                const buf = new ArrayBuffer(s.length);
+                const view = new Uint8Array(buf);
+                for (let i=0; i<s.length; i++) view[i] = s.charCodeAt(i) & 0xFF;
+                return buf;
+            }
+
+            // Crear el Blob y descargar
+            const fileName = `reporte_${type}_${new Date().toISOString().split('T')[0]}.xlsx`;
+            const blob = new Blob([s2ab(wbout)], {type:'application/octet-stream'});
+            
+            // Crear link de descarga
+            const elem = window.document.createElement('a');
+            elem.href = window.URL.createObjectURL(blob);
+            elem.download = fileName;
+            document.body.appendChild(elem);
+            elem.click();
+            document.body.removeChild(elem);
+            
+            console.log('Archivo descargado exitosamente');
+
+        } catch (error) {
+            console.error('Error durante la exportación:', error);
+            alert('Ocurrió un error durante la exportación: ' + error.message);
+        }
+    }
+
+    // Evento para el botón de exportar
+    jQuery('#export-excel').on('click', function() {
+        console.log('Botón de exportar clickeado');
+        const type = jQuery('#type-filter').val();
+        console.log('Tipo seleccionado:', type);
+        
+        if (!currentStats || currentStats.length === 0) {
+            console.warn('No hay datos para exportar');
+            alert('No hay datos para exportar. Por favor, seleccione los filtros y espere a que se carguen los datos.');
+            return;
+        }
+        
+        console.log('Iniciando exportación con datos:', currentStats);
+        exportToExcel(currentStats, type);
+    });
+
+    // Variable para almacenar los datos actuales
+    let currentStats = null;
 
     // Actualizar al cambiar los filtros
     $('.gravityflow-filter').change(function() {

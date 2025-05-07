@@ -74,10 +74,20 @@ class GF_Task_Reports {
             null
         );
 
+        // Registrar y cargar xlsx-style
+        wp_register_script(
+            'xlsx-style',
+            'https://cdn.jsdelivr.net/npm/xlsx-style@0.8.13/dist/xlsx.full.min.js',
+            array(),
+            '0.8.13',
+            true
+        );
+        wp_enqueue_script('xlsx-style');
+
         wp_enqueue_script(
             'gf-task-reports', 
             GFTR_PLUGIN_URL . 'assets/js/reports.js', 
-            array('jquery', 'google-charts'), 
+            array('jquery', 'google-charts', 'xlsx-style'), 
             GFTR_VERSION, 
             true
         );
@@ -108,8 +118,9 @@ class GF_Task_Reports {
         $forms = GFAPI::get_forms();
         
         // Construir los filtros HTML
-        $output = '<div class="gravityflow-reports">';  // Añadido contenedor principal
-        $output .= '<div class="gravityflow-report-filters">';
+        $output = '<div class="gravityflow-reports">';
+        $output .= '<div class="gravityflow-report-filters">
+            <div class="filter-group">';
         
         // Filtro de período
         $output .= '<select id="period-filter" class="gravityflow-filter">
@@ -135,8 +146,32 @@ class GF_Task_Reports {
             <option value="encargado">Encargado</option>
             <option value="paso">Paso</option>
         </select>';
+
+        // Botón de exportar
+        $output .= '<button id="export-excel" class="gravityflow-export-btn">
+            Exportar a Excel
+        </button>';
         
-        $output .= '</div>';
+        $output .= '</div></div>';
+
+        // Agregar estilos inline
+        $output .= '<style>
+            .gravityflow-report-filters {
+                margin-bottom: 20px;
+            }
+            .filter-group {
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                flex-wrap: nowrap;
+            }
+            .gravityflow-filter {
+                padding: 8px;
+                border: 1px solid #ddd;
+                border-radius: 4px;
+                min-width: 150px;
+            }
+        </style>';
         
         // Spinner de carga
         $output .= '<div id="loading-spinner" class="gravityflow-spinner" style="display: none;">

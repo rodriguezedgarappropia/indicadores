@@ -55,7 +55,6 @@ class GF_Task_Reports {
     private function enqueue_report_assets() {
         static $assets_loaded = false;
 
-        // Si ya se cargaron los assets, no los cargamos de nuevo
         if ($assets_loaded) {
             return;
         }
@@ -67,11 +66,36 @@ class GF_Task_Reports {
             GFTR_VERSION
         );
 
+        // Flatpickr CSS
+        wp_enqueue_style(
+            'flatpickr',
+            'https://cdn.jsdelivr.net/npm/flatpickr/dist/flatpickr.min.css',
+            array(),
+            '4.6.13'
+        );
+
         wp_enqueue_script(
             'google-charts', 
             'https://www.gstatic.com/charts/loader.js', 
             array(), 
             null
+        );
+
+        // Flatpickr JS
+        wp_enqueue_script(
+            'flatpickr',
+            'https://cdn.jsdelivr.net/npm/flatpickr',
+            array('jquery'),
+            '4.6.13',
+            true
+        );
+        // Flatpickr español
+        wp_enqueue_script(
+            'flatpickr-es',
+            'https://cdn.jsdelivr.net/npm/flatpickr/dist/l10n/es.js',
+            array('flatpickr'),
+            '4.6.13',
+            true
         );
 
         // Registrar y cargar xlsx-style
@@ -87,7 +111,7 @@ class GF_Task_Reports {
         wp_enqueue_script(
             'gf-task-reports', 
             GFTR_PLUGIN_URL . 'assets/js/reports.js', 
-            array('jquery', 'google-charts', 'xlsx-style'), 
+            array('jquery', 'google-charts', 'xlsx-style', 'flatpickr', 'flatpickr-es'), 
             GFTR_VERSION, 
             true
         );
@@ -119,22 +143,30 @@ class GF_Task_Reports {
         
         // Construir los filtros HTML
         $output = '<div class="gravityflow-reports">';
-        $output .= '<div class="gravityflow-report-filters">
-            <div class="filter-group">';
+        $output .= '<div class="gravityflow-report-filters-flex">'
+            . '<div class="filter-group-left">';
         
         // Filtro de período
         $output .= '<select id="period-filter" class="gravityflow-filter">
             <option value="today">Hoy</option>
-            <option value="last_week">Semana anterior</option>
-            <option value="1">Último mes</option>
-            <option value="3">Últimos 3 meses</option>
-            <option value="6">Últimos 6 meses</option>
-            <option value="12">Últimos 12 meses</option>
+            <option value="last_week">Última semana</option>
+            <option value="last_month">Último mes</option>
+            <option value="last_3_months">Últimos 3 meses</option>
+            <option value="last_6_months">Últimos 6 meses</option>
+            <option value="last_year">Último año</option>
+            <option value="custom">Personalizado</option>
         </select>';
-        
+
+        // Contenedor para el selector de fechas personalizado (ahora dentro del grupo de filtros)
+        $output .= '<div id="custom-date-container" class="custom-date-container" style="display: none; margin: 0; padding: 0; background: none; border: none;">'
+            . '<div class="custom-date-wrapper" style="padding:0; background:none; border:none;">'
+            . '<input type="text" id="date-range" class="gravityflow-filter" placeholder="Seleccionar rango de fechas">'
+            . '</div>'
+            . '</div>';
+
         // Filtro de formulario
         $output .= '<select id="form-filter" class="gravityflow-filter">
-            <option value="">Seleccione un formulario</option>';
+            <option value="">Seleccionar formulario</option>';
         foreach ($forms as $form) {
             $output .= '<option value="' . esc_attr($form['id']) . '">' . esc_html($form['title']) . '</option>';
         }
@@ -142,34 +174,92 @@ class GF_Task_Reports {
         
         // Filtro de tipo
         $output .= '<select id="type-filter" class="gravityflow-filter">
-            <option value="">Seleccione tipo</option>
-            <option value="encargado">Encargado</option>
-            <option value="paso">Paso</option>
+            <option value="">Seleccionar tipo</option>
+            <option value="paso">Por Paso</option>
+            <option value="encargado">Por Encargado</option>
+            <option value="mensual">Por Mes</option>
         </select>';
-
-        // Botón de exportar
-        $output .= '<button id="export-excel" class="gravityflow-export-btn">
-            Exportar a Excel
-        </button>';
         
-        $output .= '</div></div>';
+        $output .= '</div>';
+        // Botón de exportar a la derecha
+        $output .= '<div class="filter-group-right">'
+            . '<button id="export-excel" class="gravityflow-export-btn">Exportar a Excel</button>'
+            . '</div>';
+        $output .= '</div>';
 
-        // Agregar estilos inline
+        // Ajustar estilos para flexbox y responsividad
         $output .= '<style>
-            .gravityflow-report-filters {
+            .gravityflow-report-filters-flex {
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                gap: 10px;
+                flex-wrap: wrap;
                 margin-bottom: 20px;
             }
-            .filter-group {
+            .filter-group-left {
                 display: flex;
                 align-items: center;
                 gap: 10px;
-                flex-wrap: nowrap;
+                flex-wrap: wrap;
+            }
+            .filter-group-right {
+                display: flex;
+                align-items: center;
             }
             .gravityflow-filter {
                 padding: 8px;
                 border: 1px solid #ddd;
                 border-radius: 4px;
                 min-width: 150px;
+                max-width: 250px;
+            }
+            .custom-date-container {
+                display: flex;
+                align-items: center;
+                margin: 0;
+                padding: 0;
+                background: none;
+                border: none;
+            }
+            .custom-date-wrapper {
+                display: flex;
+                gap: 10px;
+                align-items: center;
+                padding: 0;
+                background: none;
+                border: none;
+            }
+            #date-range {
+                min-width: 200px;
+                max-width: 250px;
+            }
+            .gravityflow-export-btn {
+                background: #218838;
+                color: #fff;
+                border: none;
+                border-radius: 5px;
+                padding: 10px 22px;
+                font-size: 16px;
+                font-weight: 500;
+                cursor: pointer;
+                transition: background 0.2s;
+            }
+            .gravityflow-export-btn:hover {
+                background: #18692c;
+            }
+            @media (max-width: 900px) {
+                .gravityflow-report-filters-flex {
+                    flex-direction: column;
+                    align-items: stretch;
+                }
+                .filter-group-left {
+                    flex-wrap: wrap;
+                }
+                .filter-group-right {
+                    justify-content: flex-end;
+                    margin-top: 10px;
+                }
             }
         </style>';
         
@@ -197,31 +287,30 @@ class GF_Task_Reports {
     /**
      * Construye la condición SQL para filtrar por fecha según el período seleccionado
      * @param string $period Período seleccionado ('today', 'last_week', '1', '3', '6', '12', 'all')
+     * @param string $start_date Fecha de inicio del filtro personalizado
+     * @param string $end_date Fecha de fin del filtro personalizado
      * @return string Condición SQL para filtrar por fecha
      */
-    private function build_date_condition($period) {
-        // Si no hay período seleccionado, no aplicar filtro
+    private function build_date_condition($period, $start_date = null, $end_date = null) {
         if ($period === 'all') {
             return '';
         }
-        
-        // Para el día actual
         if ($period === 'today') {
             return " AND DATE(date_created) = CURDATE()";
         }
-        
-        // Para la semana anterior completa (de lunes a domingo)
         if ($period === 'last_week') {
             return " AND YEARWEEK(date_created, 1) = YEARWEEK(CURDATE() - INTERVAL 1 WEEK, 1)";
         }
-        
-        // Para períodos en meses (1, 3, 6, 12)
         if (is_numeric($period)) {
             $date_limit = date('Y-m-d H:i:s', strtotime("-{$period} months"));
             return " AND date_created >= '{$date_limit}'";
         }
-        
-        // Si llega aquí, es un período no válido
+        // Filtro personalizado
+        if ($period === 'custom' && $start_date && $end_date) {
+            $start = $start_date . ' 00:00:00';
+            $end = $end_date . ' 23:59:59';
+            return " AND date_created >= '{$start}' AND date_created <= '{$end}'";
+        }
         return '';
     }
 
@@ -229,15 +318,17 @@ class GF_Task_Reports {
      * Obtiene estadísticas de workflow por usuario asignado
      * @param string $period Período para filtrar
      * @param int $form_id ID del formulario
+     * @param string $start_date Fecha de inicio del filtro personalizado
+     * @param string $end_date Fecha de fin del filtro personalizado
      * @return array Estadísticas de tareas completadas y aprobadas por usuario
      */
-    private function get_workflow_stats($period, $form_id) {
+    private function get_workflow_stats($period, $form_id, $start_date = null, $end_date = null) {
         error_log('=== INICIO get_workflow_stats ===');
-        error_log("Parámetros recibidos: period={$period}, form_id={$form_id}");
+        error_log("Parámetros recibidos: period={$period}, form_id={$form_id}, start_date={$start_date}, end_date={$end_date}");
         
         global $wpdb;
         
-        $date_condition = $this->build_date_condition($period);
+        $date_condition = $this->build_date_condition($period, $start_date, $end_date);
         error_log("Condición de fecha generada: {$date_condition}");
         
         $query = $wpdb->prepare("
@@ -246,7 +337,7 @@ class GF_Task_Reports {
                 u.display_name,
                 SUM(CASE WHEN al.log_value = 'complete' THEN 1 ELSE 0 END) as total_completed,
                 SUM(CASE WHEN al.log_value = 'approved' THEN 1 ELSE 0 END) as total_approved,
-                AVG(al.duration / 3600) as avg_duration
+                ROUND(AVG(al.duration / 3600), 2) as avg_duration
             FROM {$wpdb->prefix}gravityflow_activity_log al
             LEFT JOIN {$wpdb->users} u ON al.assignee_id = u.ID
             WHERE 
@@ -281,11 +372,13 @@ class GF_Task_Reports {
      * Obtiene estadísticas por paso del workflow
      * @param int $form_id ID del formulario
      * @param string $period Período para filtrar
+     * @param string $start_date Fecha de inicio del filtro personalizado
+     * @param string $end_date Fecha de fin del filtro personalizado
      * @return array Estadísticas de tareas completadas y duración promedio por paso
      */
-    private function get_step_stats($form_id, $period) {
+    private function get_step_stats($form_id, $period, $start_date = null, $end_date = null) {
         error_log('=== INICIO get_step_stats ===');
-        error_log("Parámetros recibidos: form_id={$form_id}, period={$period}");
+        error_log("Parámetros recibidos: form_id={$form_id}, period={$period}, start_date={$start_date}, end_date={$end_date}");
         
         global $wpdb;
         
@@ -309,7 +402,7 @@ class GF_Task_Reports {
             error_log('Número de pasos encontrados: ' . count($steps));
             
             // Construir la condición de fecha
-            $date_condition = $this->build_date_condition($period);
+            $date_condition = $this->build_date_condition($period, $start_date, $end_date);
             error_log('Condición de fecha: ' . $date_condition);
             
             // Consulta para obtener estadísticas por paso
@@ -317,7 +410,7 @@ class GF_Task_Reports {
                 SELECT 
                     feed_id,
                     COUNT(*) as total_completed,
-                    AVG(duration / 3600) as avg_duration
+                    ROUND(AVG(duration / 3600), 2) as avg_duration
                 FROM {$wpdb->prefix}gravityflow_activity_log
                 WHERE log_object = 'step'
                 AND log_event = 'ended'
@@ -378,6 +471,93 @@ class GF_Task_Reports {
     }
 
     /**
+     * Obtiene estadísticas mensuales del workflow
+     * @param int $form_id ID del formulario
+     * @param string $period Período para filtrar
+     * @param string $start_date Fecha de inicio del filtro personalizado
+     * @param string $end_date Fecha de fin del filtro personalizado
+     * @return array Estadísticas de tareas completadas y duración promedio por mes
+     */
+    private function get_monthly_stats($form_id, $period, $start_date = null, $end_date = null) {
+        error_log('=== INICIO get_monthly_stats ===');
+        error_log("Parámetros recibidos: form_id={$form_id}, period={$period}, start_date={$start_date}, end_date={$end_date}");
+        
+        global $wpdb;
+        
+        try {
+            // Construir la condición de fecha
+            $date_condition = $this->build_date_condition($period, $start_date, $end_date);
+            error_log('Condición de fecha: ' . $date_condition);
+            
+            // Consulta para obtener estadísticas mensuales
+            $query = $wpdb->prepare("
+                SELECT 
+                    DATE_FORMAT(date_created, '%Y-%m') as month,
+                    DATE_FORMAT(date_created, '%M %Y') as display_name,
+                    COUNT(*) as total_completed,
+                    ROUND(AVG(duration/3600), 2) as avg_duration
+                FROM {$wpdb->prefix}gravityflow_activity_log
+                WHERE log_object = 'workflow'
+                AND log_event = 'ended'
+                AND log_value IN ('complete', 'approved')
+                AND form_id = %d
+                {$date_condition}
+                GROUP BY DATE_FORMAT(date_created, '%Y-%m')
+                ORDER BY month DESC
+            ", $form_id);
+            
+            error_log('Ejecutando query: ' . $query);
+            $results = $wpdb->get_results($query);
+            
+            if ($wpdb->last_error) {
+                error_log('Error en la consulta SQL: ' . $wpdb->last_error);
+                throw new Exception('Error al consultar la base de datos: ' . $wpdb->last_error);
+            }
+            
+            error_log('Resultados de la consulta: ' . print_r($results, true));
+            
+            // Procesar los resultados para traducir los nombres de los meses
+            $meses = array(
+                'January' => 'Enero',
+                'February' => 'Febrero',
+                'March' => 'Marzo',
+                'April' => 'Abril',
+                'May' => 'Mayo',
+                'June' => 'Junio',
+                'July' => 'Julio',
+                'August' => 'Agosto',
+                'September' => 'Septiembre',
+                'October' => 'Octubre',
+                'November' => 'Noviembre',
+                'December' => 'Diciembre'
+            );
+            
+            $stats = array();
+            foreach ($results as $result) {
+                // Extraer el mes y año del display_name
+                list($month, $year) = explode(' ', $result->display_name);
+                // Traducir el mes
+                $month_es = $meses[$month] ?? $month;
+                
+                $stats[] = array(
+                    'month' => $result->month,
+                    'display_name' => $month_es . ' ' . $year,
+                    'total_completed' => $result->total_completed,
+                    'avg_duration' => round($result->avg_duration, 1)
+                );
+            }
+            
+            error_log('Estadísticas procesadas: ' . print_r($stats, true));
+            return $stats;
+            
+        } catch (Exception $e) {
+            error_log('Error en get_monthly_stats: ' . $e->getMessage());
+            error_log('Stack trace: ' . $e->getTraceAsString());
+            throw $e;
+        }
+    }
+
+    /**
      * Maneja las peticiones AJAX para obtener estadísticas
      * Procesa los parámetros, obtiene las estadísticas y devuelve JSON
      * @return void Envía respuesta JSON con las estadísticas
@@ -392,8 +572,23 @@ class GF_Task_Reports {
         $form_id = isset($_POST['form_id']) ? intval($_POST['form_id']) : 0;
         $period = isset($_POST['period']) ? sanitize_text_field($_POST['period']) : 'all';
         $type = isset($_POST['type']) ? sanitize_text_field($_POST['type']) : '';
-        
+        $period_map = [
+            'last_month' => 1,
+            'last_3_months' => 3,
+            'last_6_months' => 6,
+            'last_year' => 12
+        ];
+        if (isset($period_map[$period])) {
+            $period = $period_map[$period];
+        }
+        $start_date = null;
+        $end_date = null;
+        if ($period === 'custom') {
+            $start_date = isset($_POST['start_date']) ? sanitize_text_field($_POST['start_date']) : null;
+            $end_date = isset($_POST['end_date']) ? sanitize_text_field($_POST['end_date']) : null;
+        }
         error_log("Parámetros procesados: form_id={$form_id}, period={$period}, type={$type}");
+        error_log('[DEBUG] Valor de $period recibido en backend: ' . $period);
         
         if (!$form_id) {
             error_log('Error: Formulario no válido');
@@ -404,10 +599,13 @@ class GF_Task_Reports {
         try {
             if ($type === 'paso') {
                 error_log('Obteniendo estadísticas de pasos');
-                $stats = $this->get_step_stats($form_id, $period);
+                $stats = $this->get_step_stats($form_id, $period, $start_date, $end_date);
+            } elseif ($type === 'mensual') {
+                error_log('Obteniendo estadísticas mensuales');
+                $stats = $this->get_monthly_stats($form_id, $period, $start_date, $end_date);
             } else {
                 error_log('Obteniendo estadísticas de workflow');
-                $stats = $this->get_workflow_stats($period, $form_id);
+                $stats = $this->get_workflow_stats($period, $form_id, $start_date, $end_date);
             }
             
             error_log('Estadísticas obtenidas: ' . print_r($stats, true));

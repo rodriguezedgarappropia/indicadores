@@ -4,9 +4,7 @@ jQuery(document).ready(function($) {
     google.charts.setOnLoadCallback(initializeCharts);
     
     function fetchWorkflowStats() {
-        // Mostrar el spinner al inicio de la petición
         jQuery('#loading-spinner').show();
-        
         const period = jQuery('#period-filter').val();
         const formId = jQuery('#form-filter').val();
         const type = jQuery('#type-filter').val();
@@ -24,6 +22,22 @@ jQuery(document).ready(function($) {
             return;
         }
 
+        let startDate = null;
+        let endDate = null;
+        if (period === 'custom') {
+            const rango = jQuery('#date-range').val();
+            if (rango && rango.includes(' a ')) {
+                [startDate, endDate] = rango.split(' a ');
+            } else if (rango && rango.includes(' to ')) {
+                [startDate, endDate] = rango.split(' to ');
+            }
+            if (!startDate || !endDate) {
+                container.html('<div class="notice">Por favor seleccione un rango de fechas válido.</div>');
+                jQuery('#loading-spinner').hide();
+                return;
+            }
+        }
+
         const data = {
             action: 'get_workflow_stats',
             period: period,
@@ -31,6 +45,10 @@ jQuery(document).ready(function($) {
             type: type,
             nonce: gfTaskReports.nonce
         };
+        if (period === 'custom') {
+            data.start_date = startDate;
+            data.end_date = endDate;
+        }
 
         console.log('Enviando datos:', data);
 
@@ -40,20 +58,17 @@ jQuery(document).ready(function($) {
             data: data,
             success: function(response) {
                 console.log('Respuesta completa:', response);
-                
                 if (response.success) {
                     updateCharts(response.data);
                 } else {
                     console.error('Error en la respuesta:', response.data);
                     container.html('<div class="error">Error al obtener los datos.</div>');
                 }
-                // Ocultar el spinner después de procesar la respuesta
                 jQuery('#loading-spinner').hide();
             },
             error: function(xhr, status, error) {
                 console.error('Error en la solicitud AJAX:', error);
                 container.html('<div class="error">Error al obtener los datos: ' + error + '</div>');
-                // Ocultar el spinner en caso de error
                 jQuery('#loading-spinner').hide();
             }
         });
@@ -83,6 +98,7 @@ jQuery(document).ready(function($) {
 
         // Determinar el tipo de datos basado en el primer elemento
         const isStepType = stats[0].hasOwnProperty('step_type');
+        const isMonthlyType = stats[0].hasOwnProperty('month');
 
         if (isStepType) {
             // Crear contenedor para gráfico de barras
@@ -124,6 +140,108 @@ jQuery(document).ready(function($) {
                     bold: true
                 },
                 height: Math.max(400, stats.length * 50), // Altura dinámica basada en número de pasos
+                legend: { position: 'none' },
+                chartArea: {
+                    left: '20%',
+                    right: '15%',
+                    top: '10%',
+                    bottom: '10%',
+                    width: '100%',
+                    height: '80%'
+                },
+                hAxis: {
+                    title: 'Tareas Completadas',
+                    titleTextStyle: {
+                        fontSize: 14,
+                        italic: false
+                    },
+                    minValue: 0
+                },
+                vAxis: {
+                    title: '',
+                    textStyle: {
+                        fontSize: 12
+                    }
+                },
+                annotations: {
+                    textStyle: {
+                        fontSize: 12,
+                        color: '#555'
+                    },
+                    alwaysOutside: true
+                },
+                bar: { groupWidth: '70%' }
+            };
+
+            const chart = new google.visualization.BarChart(barContainer[0]);
+            chart.draw(data, options);
+
+            // Crear leyenda de colores para los tipos de paso
+            const legendContainer = jQuery('<div>', {
+                class: 'bar-legend',
+                css: {
+                    display: 'flex',
+                    justifyContent: 'center',
+                    gap: '20px',
+                    marginTop: '10px',
+                    fontSize: '12px'
+                }
+            });
+
+            // Generar la leyenda según los tipos usados en los datos
+            const tiposUsados = new Set(stats.map(step => step.step_type));
+            tiposUsados.forEach(tipo => {
+                const color = stepColors[tipo] || '#4285F4';
+                const label = stepTypeLabels[tipo] || tipo;
+                legendContainer.append(`
+                    <div style="display: flex; align-items: center;">
+                        <span style="display: inline-block; width: 16px; height: 16px; background: ${color}; border-radius: 50%; margin-right: 6px;"></span>
+                        <span>${label}</span>
+                    </div>
+                `);
+            });
+
+            barContainer.append(legendContainer);
+
+        } else if (isMonthlyType) {
+            // Crear contenedor para gráfico de barras mensual
+            const barContainer = jQuery('<div>', {
+                class: 'bar-chart-container',
+                css: {
+                    width: '100%',
+                    height: '600px',
+                    marginBottom: '20px',
+                    backgroundColor: '#fff',
+                    borderRadius: '8px',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                    padding: '20px'
+                }
+            });
+
+            container.append(barContainer);
+
+            // Preparar datos para el gráfico de barras mensual
+            const chartData = [['Mes', 'Tareas Completadas', { role: 'style' }, { role: 'annotation' }]];
+            
+            stats.forEach(month => {
+                const totalCompleted = parseInt(month.total_completed) || 0;
+                const avgDuration = parseFloat(month.avg_duration) || 0;
+                chartData.push([
+                    month.display_name,
+                    totalCompleted,
+                    '#4285F4',
+                    `${totalCompleted} (${avgDuration.toFixed(1)}h)`
+                ]);
+            });
+
+            const data = google.visualization.arrayToDataTable(chartData);
+            const options = {
+                title: 'Estadísticas Mensuales',
+                titleTextStyle: {
+                    fontSize: 16,
+                    bold: true
+                },
+                height: Math.max(400, stats.length * 50),
                 legend: { position: 'none' },
                 chartArea: {
                     left: '20%',
@@ -293,9 +411,20 @@ jQuery(document).ready(function($) {
 
     // Definir colores según el tipo de paso
     const stepColors = {
+        'workflow_start': '#7EC8E3',
         'approval': '#4285F4',
         'user_input': '#34A853',
-        'notification': '#FBBC05'
+        'notification': '#FBBC05',
+        'update_field_values': '#FF7043'
+    };
+
+    const stepTypeLabels = {
+        'workflow_start': 'Inicio de flujo',
+        'user_input': 'Aportación de usuario',
+        'approval': 'Aprobación',
+        'notification': 'Notificación',
+        'workflow_end': 'Fin de flujo',
+        'update_field_values': 'Actualizar campos'
     };
 
     // Función para exportar a Excel
@@ -324,9 +453,21 @@ jQuery(document).ready(function($) {
                 stats.forEach(step => {
                     data.push([
                         step.display_name,
-                        step.step_type,
+                        stepTypeLabels[step.step_type] || step.step_type,
                         parseInt(step.total_completed) || 0,
                         parseFloat(step.avg_duration) || 0
+                    ]);
+                });
+            } else if (type === 'mensual') {
+                // Encabezados para reporte mensual
+                data.push(['Mes', 'Tareas Completadas', 'Duración Promedio (h)']);
+                
+                // Datos
+                stats.forEach(month => {
+                    data.push([
+                        month.display_name,
+                        parseInt(month.total_completed) || 0,
+                        parseFloat(month.avg_duration) || 0
                     ]);
                 });
             } else {
@@ -450,4 +591,38 @@ jQuery(document).ready(function($) {
     $('.gravityflow-filter').change(function() {
         fetchWorkflowStats();
     });
+
+    // Mostrar/ocultar el selector de fechas personalizado según el período seleccionado
+    function toggleCustomDateContainer() {
+        const period = jQuery('#period-filter').val();
+        if (period === 'custom') {
+            jQuery('#custom-date-container').show();
+        } else {
+            jQuery('#custom-date-container').hide();
+        }
+    }
+
+    // Evento para el cambio de período
+    jQuery(document).on('change', '#period-filter', function() {
+        toggleCustomDateContainer();
+    });
+
+    // Inicializar flatpickr si está disponible
+    if (typeof flatpickr !== 'undefined') {
+        flatpickr('#date-range', {
+            mode: 'range',
+            dateFormat: 'Y-m-d',
+            locale: 'es',
+            maxDate: 'today',
+            allowInput: true,
+            onClose: function(selectedDates, dateStr, instance) {
+                if (selectedDates.length === 2 && jQuery('#period-filter').val() === 'custom') {
+                    fetchWorkflowStats();
+                }
+            }
+        });
+    }
+
+    // Al cargar la página, asegurarse de que el contenedor esté oculto si no es personalizado
+    toggleCustomDateContainer();
 }); 

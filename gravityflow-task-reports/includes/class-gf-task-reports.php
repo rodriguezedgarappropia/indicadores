@@ -148,12 +148,12 @@ class GF_Task_Reports {
         
         // Filtro de período
         $output .= '<select id="period-filter" class="gravityflow-filter">
-            <option value="today">Hoy</option>
-            <option value="last_week">Última semana</option>
-            <option value="last_month">Último mes</option>
-            <option value="last_3_months">Últimos 3 meses</option>
-            <option value="last_6_months">Últimos 6 meses</option>
-            <option value="last_year">Último año</option>
+            <option value="today">Registros de Hoy</option>
+            <option value="last_week">Última Semana Completa</option>
+            <option value="last_month">Últimos 30 Días</option>
+            <option value="last_3_months">Últimos 90 Días</option>
+            <option value="last_6_months">Últimos 180 Días</option>
+            <option value="last_year">Últimos 365 Días</option>
             <option value="custom">Personalizado</option>
         </select>';
 

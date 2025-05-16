@@ -1,0 +1,86 @@
+Para pasos de user input (como el 3278):
+SELECT 
+    a.lead_id,
+    a.assignee_id,
+    a.display_name,
+    a.date_created,
+    a.log_value
+FROM wpkq_gravityflow_activity_log a
+INNER JOIN (
+    SELECT assignee_id, feed_id, lead_id, MAX(date_created) as max_date
+    FROM wpkq_gravityflow_activity_log
+    WHERE form_id = 302
+      AND log_object = 'assignee'
+      AND log_event = 'status'
+      AND feed_id = 3278
+    GROUP BY assignee_id, feed_id, lead_id
+) ult
+ON a.assignee_id = ult.assignee_id
+AND a.feed_id = ult.feed_id
+AND a.lead_id = ult.lead_id
+AND a.date_created = ult.max_date
+WHERE a.form_id = 302
+  AND a.feed_id = 3278
+  AND a.log_object = 'assignee'
+  AND a.log_event = 'status'
+  AND a.log_value = 'pending'
+  AND EXISTS (
+    SELECT 1 
+    FROM wpkq_gf_entry 
+    WHERE id = a.lead_id
+  )
+  AND NOT EXISTS (
+    SELECT 1 
+    FROM wpkq_gravityflow_activity_log step
+    WHERE step.lead_id = a.lead_id
+      AND step.log_object = 'step'
+      AND step.log_event = 'ended'
+      AND step.log_value IN ('complete', 'approved')
+      AND step.date_created > a.date_created
+  )
+ORDER BY a.date_created DESC;
+
+Para pasos de aprobación (como el 3995)
+SELECT 
+    a.lead_id,
+    a.assignee_id,
+    a.display_name,
+    a.date_created,
+    a.log_value
+FROM wpkq_gravityflow_activity_log a
+INNER JOIN (
+    SELECT assignee_id, feed_id, lead_id, MAX(date_created) as max_date
+    FROM wpkq_gravityflow_activity_log
+    WHERE form_id = 302
+      AND log_object = 'assignee'
+      AND log_event = 'status'
+      AND feed_id = 3995
+    GROUP BY assignee_id, feed_id, lead_id
+) ult
+ON a.assignee_id = ult.assignee_id
+AND a.feed_id = ult.feed_id
+AND a.lead_id = ult.lead_id
+AND a.date_created = ult.max_date
+WHERE a.form_id = 302
+  AND a.feed_id = 3995
+  AND a.log_object = 'assignee'
+  AND a.log_event = 'status'
+  AND a.log_value = 'pending'
+  AND EXISTS (
+    SELECT 1 
+    FROM wpkq_gf_entry 
+    WHERE id = a.lead_id
+  )
+  AND NOT EXISTS (
+    SELECT 1 
+    FROM wpkq_gravityflow_activity_log step
+    WHERE step.lead_id = a.lead_id
+      AND (
+        (step.log_object = 'step' AND step.log_event = 'ended' AND step.log_value = 'approved')
+        OR 
+        (step.log_object = 'workflow' AND step.log_event = 'ended')
+        OR
+        (step.log_object = 'workflow' AND step.log_event = 'sent_to_step' AND step.date_created > a.date_created)
+      )
+  )
+ORDER BY a.date_created DESC;

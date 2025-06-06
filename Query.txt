@@ -84,3 +84,77 @@ WHERE a.form_id = 302
       )
   )
 ORDER BY a.date_created DESC;
+
+Consulta nueva
+
+SELECT 
+    a.assignee_id,
+    u.display_name,
+    COUNT(DISTINCT a.lead_id) AS total_tareas_pendientes
+FROM wpkq_gravityflow_activity_log a
+JOIN wpkq_users u ON a.assignee_id = u.ID
+WHERE a.form_id = 302 
+AND a.log_object = 'assignee' 
+AND a.log_event = 'status' 
+AND a.log_value = 'pending'
+AND EXISTS (
+    SELECT 1 
+    FROM wpkq_gf_entry 
+    WHERE id = a.lead_id  -- Aseguramos que exista la entrada
+)
+AND NOT EXISTS (
+    SELECT 1 
+    FROM wpkq_gravityflow_activity_log step
+    WHERE step.lead_id = a.lead_id
+      AND step.log_object = 'assignee'
+      AND step.log_event = 'status'
+      AND step.log_value IN ('complete', 'approved')
+      AND step.date_created > a.date_created
+)
+GROUP BY a.assignee_id, u.display_name;
+
+
+// Cantidad de tareas por pasos
+SELECT 
+    a.feed_id AS step_id,
+    COUNT(DISTINCT a.lead_id) AS total_tareas_pendientes
+FROM wpkq_gravityflow_activity_log a
+INNER JOIN wpkq_gf_entry e ON a.lead_id = e.id
+INNER JOIN (
+    -- Subquery para obtener todos los pasos únicos del flujo
+    SELECT DISTINCT feed_id, log_object
+    FROM wpkq_gravityflow_activity_log
+    WHERE form_id = 302
+    AND feed_id IS NOT NULL
+    AND log_object IN ('step', 'assignee')
+) steps ON a.feed_id = steps.feed_id
+WHERE a.form_id = 302 
+AND a.log_object = 'assignee' 
+AND a.log_event = 'status' 
+AND a.log_value = 'pending'
+AND e.status = 'active'
+AND NOT EXISTS (
+    SELECT 1 
+    FROM wpkq_gravityflow_activity_log step
+    WHERE step.lead_id = a.lead_id
+    AND (
+        -- Para pasos de aprobación
+        (step.log_object = 'step' 
+         AND step.log_event = 'ended' 
+         AND step.log_value = 'approved'
+         AND step.date_created > a.date_created)
+        OR
+        -- Para pasos de user input
+        (step.log_object = 'assignee'
+         AND step.log_event = 'status'
+         AND step.log_value IN ('complete', 'approved')
+         AND step.date_created > a.date_created)
+        OR
+        -- Si el workflow ha terminado o se movió a otro paso
+        (step.log_object = 'workflow' 
+         AND (step.log_event = 'ended' OR step.log_event = 'sent_to_step')
+         AND step.date_created > a.date_created)
+    )
+)
+GROUP BY a.feed_id
+ORDER BY a.feed_id;

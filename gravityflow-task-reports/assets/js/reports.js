@@ -50,24 +50,19 @@ jQuery(document).ready(function($) {
             data.end_date = endDate;
         }
 
-        console.log('Enviando datos:', data);
-
         jQuery.ajax({
             url: gfTaskReports.ajaxurl,
             type: 'POST',
             data: data,
             success: function(response) {
-                console.log('Respuesta completa:', response);
                 if (response.success) {
                     updateCharts(response.data);
                 } else {
-                    console.error('Error en la respuesta:', response.data);
                     container.html('<div class="error">Error al obtener los datos.</div>');
                 }
                 jQuery('#loading-spinner').hide();
             },
             error: function(xhr, status, error) {
-                console.error('Error en la solicitud AJAX:', error);
                 container.html('<div class="error">Error al obtener los datos: ' + error + '</div>');
                 jQuery('#loading-spinner').hide();
             }
@@ -99,14 +94,16 @@ jQuery(document).ready(function($) {
         // Determinar el tipo de datos basado en el primer elemento
         const isStepType = stats[0].hasOwnProperty('step_type');
         const isMonthlyType = stats[0].hasOwnProperty('month');
+        const isPendingTasksType = stats[0].hasOwnProperty('total_tareas_pendientes');
+        const isPendingStepType = stats[0].hasOwnProperty('step_id') && stats[0].hasOwnProperty('total_tareas_pendientes');
 
-        if (isStepType) {
-            // Crear contenedor para gráfico de barras
+        if (isPendingStepType) {
+            // Crear contenedor para gráfico de barras de tareas pendientes por paso
             const barContainer = jQuery('<div>', {
                 class: 'bar-chart-container',
                 css: {
                     width: '100%',
-                    height: '600px',
+                    height: Math.max(600, stats.length * 40) + 'px', // Altura dinámica basada en número de pasos
                     marginBottom: '20px',
                     backgroundColor: '#fff',
                     borderRadius: '8px',
@@ -118,50 +115,69 @@ jQuery(document).ready(function($) {
             container.append(barContainer);
 
             // Preparar datos para el gráfico de barras
-            const chartData = [['Paso', 'Tareas Completadas', { role: 'style' }, { role: 'annotation' }]];
+            const chartData = [['Paso', 'Tareas Pendientes', { role: 'style' }, { role: 'annotation' }]];
             
-            stats.forEach(step => {
-                const color = stepColors[step.step_type] || '#4285F4';
-                const totalCompleted = parseInt(step.total_completed) || 0;
-                const avgDuration = parseFloat(step.avg_duration) || 0;
+            // Filtrar solo los pasos de tipo aprobación y aportación de usuario
+            const pasosFiltrados = stats.filter(step => 
+                step.step_type === 'approval' || step.step_type === 'user_input'
+            );
+            
+            pasosFiltrados.forEach(step => {
+                const totalPendientes = parseInt(step.total_tareas_pendientes) || 0;
+                const color = stepColors[step.step_type] || '#4285F4';  // Usar colores según el tipo de paso
                 chartData.push([
                     step.display_name,
-                    totalCompleted,
+                    totalPendientes,
                     color,
-                    `${totalCompleted} (${avgDuration.toFixed(1)}h)`
+                    totalPendientes.toString()
                 ]);
             });
 
             const data = google.visualization.arrayToDataTable(chartData);
             const options = {
-                title: 'Estadísticas por Paso',
+                title: 'Tareas Pendientes por Paso',
                 titleTextStyle: {
-                    fontSize: 16,
+                    color: '#202124',
+                    fontSize: 18,
                     bold: true
                 },
-                height: Math.max(400, stats.length * 50), // Altura dinámica basada en número de pasos
                 legend: { position: 'none' },
-                chartArea: {
-                    left: '20%',
-                    right: '15%',
-                    top: '10%',
-                    bottom: '10%',
-                    width: '100%',
-                    height: '80%'
+                bar: { 
+                    groupWidth: '35px' // Ancho fijo para las barras
                 },
+                chartArea: {
+                    left: '35%', // Más espacio para nombres largos de pasos
+                    right: '10%',
+                    top: '10%',
+                    bottom: '15%',
+                    width: '55%',
+                    height: '75%'
+                },
+                width: '100%',
+                backgroundColor: { fill: 'transparent' },
                 hAxis: {
-                    title: 'Tareas Completadas',
+                    title: 'Cantidad',
                     titleTextStyle: {
                         fontSize: 14,
                         italic: false
                     },
-                    minValue: 0
+                    minValue: 0,
+                    format: '#',
+                    gridlines: {
+                        count: 10,
+                        color: '#f5f5f5'
+                    },
+                    textPosition: 'out',
+                    textStyle: {
+                        fontSize: 11
+                    }
                 },
                 vAxis: {
                     title: '',
                     textStyle: {
-                        fontSize: 12
-                    }
+                        fontSize: 13 // Aumentado el tamaño de fuente
+                    },
+                    textPosition: 'out'
                 },
                 annotations: {
                     textStyle: {
@@ -169,14 +185,13 @@ jQuery(document).ready(function($) {
                         color: '#555'
                     },
                     alwaysOutside: true
-                },
-                bar: { groupWidth: '70%' }
+                }
             };
 
             const chart = new google.visualization.BarChart(barContainer[0]);
             chart.draw(data, options);
 
-            // Crear leyenda de colores para los tipos de paso
+            // Crear leyenda de colores solo para los tipos relevantes
             const legendContainer = jQuery('<div>', {
                 class: 'bar-legend',
                 css: {
@@ -188,17 +203,254 @@ jQuery(document).ready(function($) {
                 }
             });
 
-            // Generar la leyenda según los tipos usados en los datos
-            const tiposUsados = new Set(stats.map(step => step.step_type));
-            tiposUsados.forEach(tipo => {
-                const color = stepColors[tipo] || '#4285F4';
-                const label = stepTypeLabels[tipo] || tipo;
+            // Generar la leyenda solo para los tipos de paso que nos interesan
+            const tiposRelevantes = ['approval', 'user_input'];
+            tiposRelevantes.forEach(tipo => {
+                const color = stepColors[tipo];
+                const label = stepTypeLabels[tipo];
                 legendContainer.append(`
                     <div style="display: flex; align-items: center;">
                         <span style="display: inline-block; width: 16px; height: 16px; background: ${color}; border-radius: 50%; margin-right: 6px;"></span>
                         <span>${label}</span>
                     </div>
                 `);
+            });
+
+            barContainer.append(legendContainer);
+        } else if (isPendingTasksType) {
+            // Crear contenedor para gráfico de barras de tareas pendientes
+            const barContainer = jQuery('<div>', {
+                class: 'bar-chart-container',
+                css: {
+                    width: '100%',
+                    height: Math.max(600, stats.length * 40) + 'px', // Altura dinámica basada en número de usuarios
+                    marginBottom: '20px',
+                    backgroundColor: '#fff',
+                    borderRadius: '8px',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                    padding: '20px'
+                }
+            });
+
+            container.append(barContainer);
+
+            // Preparar datos para el gráfico de barras
+            const chartData = [['Usuario', 'Tareas Pendientes', { role: 'style' }, { role: 'annotation' }]];
+            
+            stats.forEach(user => {
+                const totalPendientes = parseInt(user.total_tareas_pendientes) || 0;
+                chartData.push([
+                    user.display_name,
+                    totalPendientes,
+                    '#FF6B6B',  // Color rojo suave para tareas pendientes
+                    totalPendientes.toString()
+                ]);
+            });
+
+            const data = google.visualization.arrayToDataTable(chartData);
+            const options = {
+                title: 'Tareas Pendientes por Usuario',
+                titleTextStyle: {
+                    color: '#202124',
+                    fontSize: 18,
+                    bold: true
+                },
+                legend: { position: 'none' },
+                bar: { 
+                    groupWidth: '35px' // Ancho fijo para las barras
+                },
+                chartArea: {
+                    left: '25%', // Más espacio para nombres largos
+                    right: '10%',
+                    top: '10%',
+                    bottom: '15%',
+                    width: '65%',
+                    height: '75%'
+                },
+                width: '100%',
+                backgroundColor: { fill: 'transparent' },
+                hAxis: {
+                    title: 'Cantidad',
+                    titleTextStyle: {
+                        fontSize: 14,
+                        italic: false
+                    },
+                    minValue: 0,
+                    format: '#',
+                    gridlines: {
+                        count: 10,
+                        color: '#f5f5f5'
+                    },
+                    textPosition: 'out',
+                    textStyle: {
+                        fontSize: 11
+                    }
+                },
+                vAxis: {
+                    title: '',
+                    textStyle: {
+                        fontSize: 13 // Aumentado el tamaño de fuente
+                    },
+                    textPosition: 'out'
+                },
+                annotations: {
+                    textStyle: {
+                        fontSize: 12,
+                        color: '#555'
+                    },
+                    alwaysOutside: true
+                },
+                colors: ['#FF6B6B']  // Mantener el color rojo para tareas pendientes
+            };
+
+            const chart = new google.visualization.BarChart(barContainer[0]);
+            chart.draw(data, options);
+        } else if (isStepType) {
+            // Calcular la altura del contenedor basada en la longitud de las etiquetas
+            const maxLabelLength = Math.max(...stats.map(step => step.display_name.length));
+            const baseHeight = stats.length * 50; // 50px por paso
+            const extraHeight = maxLabelLength > 40 ? 200 : 100; // Altura extra para etiquetas largas
+            const containerHeight = Math.max(400, baseHeight + extraHeight);
+
+            // Crear contenedor para gráfico de barras
+            const barContainer = jQuery('<div>', {
+                class: 'bar-chart-container',
+                css: {
+                    width: '100%',
+                    height: containerHeight + 'px',
+                    marginBottom: '20px',
+                    backgroundColor: '#fff',
+                    borderRadius: '8px',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                    padding: '20px'
+                }
+            });
+
+            container.append(barContainer);
+
+            // Preparar datos para el gráfico de barras
+            const chartData = [['Paso', 'Tareas Completadas', { role: 'style' }, 'Promedio (h)', { role: 'style' }]];
+            
+            stats.forEach(step => {
+                const color = stepColors[step.step_type] || '#4285F4';
+                const totalCompleted = parseInt(step.total_completed) || 0;
+                const avgDuration = parseFloat(step.avg_duration) || 0;
+                chartData.push([
+                    step.display_name,
+                    totalCompleted,
+                    color,
+                    avgDuration,
+                    '#FF6B6B'
+                ]);
+            });
+
+            const data = google.visualization.arrayToDataTable(chartData);
+            const options = {
+                ...getCommonBarOptions(stats),
+                title: 'Estadísticas por Paso',
+                titlePosition: 'out',
+                titleTextStyle: {
+                    fontSize: 16,
+                    bold: true,
+                    alignment: 'start',
+                    color: '#202124'
+                },
+                chartArea: {
+                    left: maxLabelLength > 40 ? '35%' : '30%', // Más espacio para etiquetas largas
+                    right: '10%',
+                    top: stats.length > 20 ? '8%' : '12%',
+                    bottom: stats.length > 20 ? '15%' : '25%',
+                    width: maxLabelLength > 40 ? '55%' : '60%', // Ajustar ancho según espacio de etiquetas
+                    height: stats.length > 20 ? '77%' : '63%'
+                },
+                legend: {
+                    position: 'bottom',
+                    alignment: 'center',
+                    maxLines: 2,
+                    textStyle: {
+                        fontSize: 11,
+                        color: '#555'
+                    }
+                },
+                series: {
+                    0: { 
+                        targetAxisIndex: 0,
+                        visibleInLegend: false
+                    },
+                    1: { 
+                        targetAxisIndex: 1,
+                        visibleInLegend: true
+                    }
+                },
+                vAxis: {
+                    textStyle: {
+                        fontSize: maxLabelLength > 40 ? 10 : 11 // Reducir tamaño de fuente para etiquetas largas
+                    },
+                    textPosition: 'out'
+                },
+                vAxes: {
+                    0: { gridlines: { count: 0 } },
+                    1: { gridlines: { count: 0 } }
+                },
+                bar: { 
+                    groupWidth: stats.length > 15 ? '60%' : '75%' // Ajustar ancho de barras según cantidad
+                }
+            };
+
+            const chart = new google.visualization.BarChart(barContainer[0]);
+            chart.draw(data, options);
+
+            // Crear leyenda de colores para los tipos de paso
+            const legendContainer = jQuery('<div>', {
+                class: 'bar-legend',
+                css: {
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    justifyContent: 'center',
+                    gap: '15px',
+                    marginTop: stats.length > 20 ? '-10px' : '5px',  // Margen positivo cuando hay pocos datos
+                    fontSize: '11px',
+                    position: 'relative',
+                    top: stats.length > 20 ? '-10px' : '0',         // Sin desplazamiento hacia arriba cuando hay pocos datos
+                    padding: '0 20px'
+                }
+            });
+
+            // Generar la leyenda según los tipos usados en los datos
+            const tiposUsados = new Set(stats.map(step => step.step_type));
+            tiposUsados.forEach(tipo => {
+                const color = stepColors[tipo] || '#4285F4';
+                const label = stepTypeLabels[tipo] || tipo;
+                const itemContainer = jQuery('<div>', {
+                    css: {
+                        display: 'flex',
+                        alignItems: 'center',
+                        whiteSpace: 'nowrap',  // Evitar que el texto se rompa
+                        margin: '2px 5px'  // Añadir margen entre elementos
+                    }
+                });
+
+                const colorDot = jQuery('<span>', {
+                    css: {
+                        display: 'inline-block',
+                        width: '10px',
+                        height: '10px',
+                        backgroundColor: color,
+                        borderRadius: '50%',
+                        marginRight: '5px',
+                        flexShrink: 0  // Evitar que el punto se encoja
+                    }
+                });
+
+                const labelSpan = jQuery('<span>', {
+                    text: label,
+                    css: {
+                        color: '#555'
+                    }
+                });
+
+                itemContainer.append(colorDot).append(labelSpan);
+                legendContainer.append(itemContainer);
             });
 
             barContainer.append(legendContainer);
@@ -221,7 +473,7 @@ jQuery(document).ready(function($) {
             container.append(barContainer);
 
             // Preparar datos para el gráfico de barras mensual
-            const chartData = [['Mes', 'Tareas Completadas', { role: 'style' }, { role: 'annotation' }]];
+            const chartData = [['Mes', 'Tareas Completadas', { role: 'style' }, 'Promedio (h)', { role: 'style' }]];
             
             stats.forEach(month => {
                 const totalCompleted = parseInt(month.total_completed) || 0;
@@ -230,55 +482,163 @@ jQuery(document).ready(function($) {
                     month.display_name,
                     totalCompleted,
                     '#4285F4',
-                    `${totalCompleted} (${avgDuration.toFixed(1)}h)`
+                    avgDuration,
+                    '#FF6B6B'
                 ]);
             });
 
             const data = google.visualization.arrayToDataTable(chartData);
             const options = {
+                ...getCommonBarOptions(stats),
                 title: 'Estadísticas Mensuales',
-                titleTextStyle: {
-                    fontSize: 16,
-                    bold: true
+                series: {
+                    0: { targetAxisIndex: 0 },
+                    1: { targetAxisIndex: 1 }
                 },
-                height: Math.max(400, stats.length * 50),
-                legend: { position: 'none' },
-                chartArea: {
-                    left: '20%',
-                    right: '15%',
-                    top: '10%',
-                    bottom: '10%',
-                    width: '100%',
-                    height: '80%'
-                },
-                hAxis: {
-                    title: 'Tareas Completadas',
-                    titleTextStyle: {
-                        fontSize: 14,
-                        italic: false
-                    },
-                    minValue: 0
-                },
-                vAxis: {
-                    title: '',
-                    textStyle: {
-                        fontSize: 12
-                    }
-                },
-                annotations: {
-                    textStyle: {
-                        fontSize: 12,
-                        color: '#555'
-                    },
-                    alwaysOutside: true
-                },
-                bar: { groupWidth: '70%' }
+                vAxes: {
+                    0: { gridlines: { count: 0 } },
+                    1: { gridlines: { count: 0 } }
+                }
             };
 
             const chart = new google.visualization.BarChart(barContainer[0]);
             chart.draw(data, options);
 
         } else {
+            // Crear contenedor para gráfico de barras
+            const barContainer = jQuery('<div>', {
+                class: 'bar-chart-container',
+                css: {
+                    width: '100%',
+                    height: Math.max(400, stats.length * 50) + 'px',
+                    marginBottom: '20px',
+                    backgroundColor: '#fff',
+                    borderRadius: '8px',
+                    boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                    padding: '20px'
+                }
+            });
+
+            container.append(barContainer);
+
+            // Preparar datos para el gráfico de barras
+            const barChartData = [['Encargado', 'Total Tareas', { role: 'style' }, 'Promedio (h)', { role: 'style' }]];
+            
+            stats.forEach(itemData => {
+                const totalCompleted = parseInt(itemData.total_completed) || 0;
+                const totalApproved = parseInt(itemData.total_approved) || 0;
+                const totalTareas = totalCompleted + totalApproved;
+                const avgDuration = parseFloat(itemData.avg_duration) || 0;
+                
+                barChartData.push([
+                    itemData.display_name,
+                    totalTareas,
+                    '#4285F4',  // Azul para total
+                    avgDuration,
+                    '#FF6B6B'   // Rojo para promedio
+                ]);
+            });
+
+            const barData = google.visualization.arrayToDataTable(barChartData);
+            const barOptions = {
+                title: 'Estadísticas por Encargado',
+                titleTextStyle: {
+                    fontSize: stats.length > 10 ? 14 : 16,
+                    bold: true
+                },
+                height: Math.max(400, stats.length * 50),
+                legend: { 
+                    position: 'bottom',
+                    alignment: 'center',
+                    maxLines: 1,
+                    textStyle: {
+                        fontSize: 12,
+                        color: '#333'
+                    },
+                    pagingTextStyle: { color: '#333' },
+                    scrollArrows: 'none',
+                    pageSize: 3
+                },
+                chartArea: {
+                    left: '15%',
+                    right: '10%',
+                    top: stats.length > 10 ? '5%' : '10%',
+                    bottom: stats.length > 10 ? '15%' : '25%',
+                    width: '75%',
+                    height: stats.length > 10 ? '80%' : '65%'
+                },
+                width: '100%',
+                backgroundColor: { fill: 'transparent' },
+                hAxis: {
+                    title: 'Cantidad',
+                    titleTextStyle: {
+                        fontSize: 14,
+                        italic: false
+                    },
+                    minValue: 0,
+                    format: '#',
+                    gridlines: {
+                        count: 10,
+                        color: '#f5f5f5'
+                    },
+                    textPosition: 'out',
+                    textStyle: {
+                        fontSize: 11
+                    }
+                },
+                vAxis: {
+                    title: '',
+                    textStyle: {
+                        fontSize: 12
+                    },
+                    textPosition: 'out'
+                },
+                bars: 'horizontal',
+                bar: { 
+                    groupWidth: calculateBarWidth(stats.length)
+                },
+                annotations: {
+                    textStyle: {
+                        fontSize: 12,
+                        color: '#555'
+                    },
+                    alwaysOutside: true,
+                    textStyle: {
+                        fontSize: 11,
+                        color: '#000'
+                    }
+                },
+                series: {
+                    0: { 
+                        targetAxisIndex: 0,
+                        annotations: {
+                            textStyle: { fontSize: 11 },
+                            format: '#,###'
+                        }
+                    },
+                    1: { 
+                        targetAxisIndex: 1,
+                        annotations: {
+                            textStyle: { fontSize: 11 },
+                            format: '#.# h'
+                        }
+                    }
+                },
+                vAxes: {
+                    0: {
+                        gridlines: { count: 0 },
+                        format: '#'
+                    },
+                    1: {
+                        gridlines: { count: 0 },
+                        format: '#.# h'
+                    }
+                }
+            };
+
+            const barChart = new google.visualization.BarChart(barContainer[0]);
+            barChart.draw(barData, barOptions);
+
             // Crear contenedor de la cuadrícula para gráficos circulares
             const gridContainer = jQuery('<div>', {
                 class: 'charts-grid',
@@ -429,15 +789,8 @@ jQuery(document).ready(function($) {
 
     // Función para exportar a Excel
     function exportToExcel(stats, type) {
-        console.log('Iniciando exportación a Excel...');
-        console.log('XLSX object:', XLSX);
-        console.log('XLSX utils:', XLSX?.utils);
-        console.log('Tipo de datos a exportar:', type);
-        console.log('Datos a exportar:', stats);
-
         // Verificar disponibilidad de XLSX
         if (typeof XLSX === 'undefined') {
-            console.error('Error: La librería XLSX no está definida');
             alert('Error: No se pudo cargar la librería de exportación');
             return;
         }
@@ -470,6 +823,18 @@ jQuery(document).ready(function($) {
                         parseFloat(month.avg_duration) || 0
                     ]);
                 });
+            } else if (type === 'tareas_pendientes_paso') {
+                // Encabezados para tareas pendientes por paso
+                data.push(['Paso', 'Tipo de Paso', 'Tareas Pendientes']);
+                
+                // Datos
+                stats.forEach(step => {
+                    data.push([
+                        step.display_name,
+                        stepTypeLabels[step.step_type] || step.step_type,
+                        parseInt(step.total_tareas_pendientes) || 0
+                    ]);
+                });
             } else {
                 // Para tipo encargado
                 data.push(['Encargado', 'Tareas Completadas', 'Tareas Aprobadas', 'Duración Promedio (h)']);
@@ -482,8 +847,6 @@ jQuery(document).ready(function($) {
                     ]);
                 });
             }
-
-            console.log('Datos preparados:', data);
 
             // Crear una hoja de cálculo manualmente
             const ws = {};
@@ -535,8 +898,6 @@ jQuery(document).ready(function($) {
                 Sheets: { 'Reporte': ws }
             };
 
-            console.log('Workbook creado:', wb);
-
             // Generar el archivo
             const wbout = XLSX.write(wb, {bookType:'xlsx', type:'binary'});
 
@@ -559,28 +920,21 @@ jQuery(document).ready(function($) {
             document.body.appendChild(elem);
             elem.click();
             document.body.removeChild(elem);
-            
-            console.log('Archivo descargado exitosamente');
 
         } catch (error) {
-            console.error('Error durante la exportación:', error);
             alert('Ocurrió un error durante la exportación: ' + error.message);
         }
     }
 
     // Evento para el botón de exportar
     jQuery('#export-excel').on('click', function() {
-        console.log('Botón de exportar clickeado');
         const type = jQuery('#type-filter').val();
-        console.log('Tipo seleccionado:', type);
         
         if (!currentStats || currentStats.length === 0) {
-            console.warn('No hay datos para exportar');
             alert('No hay datos para exportar. Por favor, seleccione los filtros y espere a que se carguen los datos.');
             return;
         }
         
-        console.log('Iniciando exportación con datos:', currentStats);
         exportToExcel(currentStats, type);
     });
 
@@ -625,4 +979,74 @@ jQuery(document).ready(function($) {
 
     // Al cargar la página, asegurarse de que el contenedor esté oculto si no es personalizado
     toggleCustomDateContainer();
+
+    // Función para calcular el ancho óptimo de las barras
+    function calculateBarWidth(recordCount) {
+        return '45px';  // Valor fijo en píxeles para mantener consistencia
+    }
+
+    // Configuración común para todos los gráficos de barras
+    const getCommonBarOptions = (stats) => {
+        return {
+            chartArea: {
+                left: '15%',
+                right: '10%',
+                top: stats.length > 10 ? '5%' : '10%',
+                bottom: stats.length > 10 ? '15%' : '25%',
+                width: '75%',
+                height: stats.length > 10 ? '80%' : '65%'
+            },
+            width: '100%',
+            backgroundColor: { fill: 'transparent' },
+            legend: { 
+                position: 'bottom',
+                alignment: 'center',
+                maxLines: 1,
+                textStyle: {
+                    fontSize: 11,
+                    color: '#555'
+                }
+            },
+            bar: { 
+                groupWidth: calculateBarWidth(stats.length)
+            },
+            hAxis: {
+                title: 'Cantidad',
+                titleTextStyle: {
+                    fontSize: 14,
+                    italic: false
+                },
+                minValue: 0,
+                format: '#',
+                gridlines: {
+                    count: 10,
+                    color: '#f5f5f5'
+                },
+                textPosition: 'out',
+                textStyle: {
+                    fontSize: 11
+                }
+            },
+            vAxis: {
+                title: '',
+                textStyle: {
+                    fontSize: 12
+                },
+                textPosition: 'out'
+            },
+            bars: 'horizontal',
+            annotations: {
+                textStyle: {
+                    fontSize: 12,
+                    color: '#555'
+                },
+                alwaysOutside: true
+            },
+            titleTextStyle: {
+                fontSize: stats.length > 10 ? 14 : 16,
+                bold: true
+            }
+        };
+    };
+
 }); 

@@ -10,23 +10,27 @@ if (!defined('ABSPATH')) {
 class GF_Task_Reports {
     private static $instance = null;
     private $nonce;
+    private $table_prefix;
     
     /**
      * Constructor de la clase
      * Inicializa los hooks necesarios y genera el nonce de seguridad
      */
     private function __construct() {
+        global $wpdb;
+        
+        // Obtener el prefijo de tabla correcto para el sitio actual
+        $this->table_prefix = $wpdb->get_blog_prefix();
+        
         add_action('init', array($this, 'init'));
         add_shortcode('gravityflow_report', array($this, 'render_report'));
         
-        // Agregar el hook de AJAX con logging
-        error_log('Registrando hook de AJAX para get_workflow_stats');
+        // Agregar el hook de AJAX
         add_action('wp_ajax_get_workflow_stats', array($this, 'handle_workflow_stats'));
         add_action('wp_ajax_nopriv_get_workflow_stats', array($this, 'handle_workflow_stats'));
 
         // Generar nonce al construir la clase
         $this->nonce = wp_create_nonce('workflow_stats_nonce');
-        error_log('Nonce generado: ' . $this->nonce);
     }
     
     /**
@@ -46,6 +50,14 @@ class GF_Task_Reports {
     public function init() {
         // Cargar traducciones
         load_plugin_textdomain('gf-task-reports', false, dirname(plugin_basename(__FILE__)) . '/languages');
+    }
+
+    /**
+     * Obtiene el prefijo de tabla correcto para el sitio actual
+     * @return string Prefijo de tabla
+     */
+    private function get_table_prefix() {
+        return $this->table_prefix;
     }
 
     /**
@@ -178,9 +190,9 @@ class GF_Task_Reports {
             <option value="paso">Por Paso</option>
             <option value="encargado">Por Encargado</option>
             <option value="mensual">Por Mes</option>
+            <option value="tareas_pendientes_paso">Tareas Pendientes por Paso</option>
         </select>';
         
-        $output .= '</div>';
         // Botón de exportar a la derecha
         $output .= '<div class="filter-group-right">'
             . '<button id="export-excel" class="gravityflow-export-btn">Exportar a Excel</button>'
@@ -289,27 +301,28 @@ class GF_Task_Reports {
      * @param string $period Período seleccionado ('today', 'last_week', '1', '3', '6', '12', 'all')
      * @param string $start_date Fecha de inicio del filtro personalizado
      * @param string $end_date Fecha de fin del filtro personalizado
+     * @param string $table_alias Alias de la tabla de actividad
      * @return string Condición SQL para filtrar por fecha
      */
-    private function build_date_condition($period, $start_date = null, $end_date = null) {
+    private function build_date_condition($period, $start_date = null, $end_date = null, $table_alias = 'al') {
         if ($period === 'all') {
             return '';
         }
         if ($period === 'today') {
-            return " AND DATE(date_created) = CURDATE()";
+            return " AND DATE({$table_alias}.date_created) = CURDATE()";
         }
         if ($period === 'last_week') {
-            return " AND YEARWEEK(date_created, 1) = YEARWEEK(CURDATE() - INTERVAL 1 WEEK, 1)";
+            return " AND YEARWEEK({$table_alias}.date_created, 1) = YEARWEEK(CURDATE() - INTERVAL 1 WEEK, 1)";
         }
         if (is_numeric($period)) {
             $date_limit = date('Y-m-d H:i:s', strtotime("-{$period} months"));
-            return " AND date_created >= '{$date_limit}'";
+            return " AND {$table_alias}.date_created >= '{$date_limit}'";
         }
         // Filtro personalizado
         if ($period === 'custom' && $start_date && $end_date) {
             $start = $start_date . ' 00:00:00';
             $end = $end_date . ' 23:59:59';
-            return " AND date_created >= '{$start}' AND date_created <= '{$end}'";
+            return " AND {$table_alias}.date_created >= '{$start}' AND {$table_alias}.date_created <= '{$end}'";
         }
         return '';
     }
@@ -323,47 +336,44 @@ class GF_Task_Reports {
      * @return array Estadísticas de tareas completadas y aprobadas por usuario
      */
     private function get_workflow_stats($period, $form_id, $start_date = null, $end_date = null) {
-        error_log('=== INICIO get_workflow_stats ===');
-        error_log("Parámetros recibidos: period={$period}, form_id={$form_id}, start_date={$start_date}, end_date={$end_date}");
-        
         global $wpdb;
+        $prefix = $this->get_table_prefix();
         
         $date_condition = $this->build_date_condition($period, $start_date, $end_date);
-        error_log("Condición de fecha generada: {$date_condition}");
         
         $query = $wpdb->prepare("
             SELECT 
-                al.assignee_id as user_id,
-                u.display_name,
+                al.assignee_id,
+                al.assignee_type,
+                CASE 
+                    WHEN al.assignee_type = 'user_id' THEN u.display_name
+                    WHEN al.assignee_type = 'role' THEN CONCAT('[ROL] ', UPPER(al.assignee_id))
+                END as display_name,
                 SUM(CASE WHEN al.log_value = 'complete' THEN 1 ELSE 0 END) as total_completed,
-                SUM(CASE WHEN al.log_value = 'approved' THEN 1 ELSE 0 END) as total_approved,
+                SUM(CASE WHEN al.log_value IN ('approved', 'rejected') THEN 1 ELSE 0 END) as total_approved,
                 ROUND(AVG(al.duration / 3600), 2) as avg_duration
-            FROM {$wpdb->prefix}gravityflow_activity_log al
-            LEFT JOIN {$wpdb->users} u ON al.assignee_id = u.ID
+            FROM {$prefix}gravityflow_activity_log al
+            LEFT JOIN {$wpdb->users} u ON al.assignee_id = u.ID AND al.assignee_type = 'user_id'
+            INNER JOIN {$prefix}gf_entry e ON al.lead_id = e.id
             WHERE 
-                al.log_value IN ('complete', 'approved')
-                AND al.assignee_type = 'user_id'
+                al.log_value IN ('complete', 'approved', 'rejected')
+                AND al.assignee_type IN ('user_id', 'role')
+                AND e.status = 'active'
                 AND al.form_id = %d
                 {$date_condition}
             GROUP BY 
                 al.assignee_id,
-                u.display_name
+                al.assignee_type,
+                display_name
             ORDER BY 
-                u.display_name
+                display_name
         ", $form_id);
-        
-        error_log("Query a ejecutar: {$query}");
         
         $results = $wpdb->get_results($query);
         
         if ($wpdb->last_error) {
-            error_log('Error en la consulta SQL: ' . $wpdb->last_error);
             return array();
         }
-        
-        error_log('Número de resultados obtenidos: ' . count($results));
-        error_log('Resultados: ' . print_r($results, true));
-        error_log('=== FIN get_workflow_stats ===');
         
         return $results;
     }
@@ -377,58 +387,47 @@ class GF_Task_Reports {
      * @return array Estadísticas de tareas completadas y duración promedio por paso
      */
     private function get_step_stats($form_id, $period, $start_date = null, $end_date = null) {
-        error_log('=== INICIO get_step_stats ===');
-        error_log("Parámetros recibidos: form_id={$form_id}, period={$period}, start_date={$start_date}, end_date={$end_date}");
-        
         global $wpdb;
         
         try {
             // Verificar que la clase existe
             if (!class_exists('Gravity_Flow_API')) {
-                error_log('Error: Gravity_Flow_API no existe');
                 throw new Exception('GravityFlow no está disponible');
             }
             
             // Obtener los pasos directamente
-            error_log('Creando instancia de Gravity_Flow_API...');
             $api = new Gravity_Flow_API($form_id);
             $steps = $api->get_steps();
             
             if (empty($steps)) {
-                error_log('Error: No se encontraron pasos en el workflow');
                 throw new Exception('No hay pasos configurados en este workflow');
             }
             
-            error_log('Número de pasos encontrados: ' . count($steps));
-            
             // Construir la condición de fecha
             $date_condition = $this->build_date_condition($period, $start_date, $end_date);
-            error_log('Condición de fecha: ' . $date_condition);
             
             // Consulta para obtener estadísticas por paso
             $query = $wpdb->prepare("
                 SELECT 
-                    feed_id,
+                    al.feed_id,
                     COUNT(*) as total_completed,
-                    ROUND(AVG(duration / 3600), 2) as avg_duration
-                FROM {$wpdb->prefix}gravityflow_activity_log
-                WHERE log_object = 'step'
-                AND log_event = 'ended'
-                AND log_value IN ('complete', 'approved')
-                AND form_id = %d
+                    ROUND(AVG(al.duration / 3600), 2) as avg_duration
+                FROM {$wpdb->prefix}gravityflow_activity_log al
+                INNER JOIN {$wpdb->prefix}gf_entry e ON al.lead_id = e.id
+                WHERE al.log_object = 'step'
+                AND al.log_event = 'ended'
+                AND al.log_value IN ('complete', 'approved', 'rejected')
+                AND e.status = 'active'
+                AND al.form_id = %d
                 {$date_condition}
-                GROUP BY feed_id
+                GROUP BY al.feed_id
             ", $form_id);
             
-            error_log('Ejecutando query: ' . $query);
             $results = $wpdb->get_results($query);
             
             if ($wpdb->last_error) {
-                error_log('Error en la consulta SQL: ' . $wpdb->last_error);
                 throw new Exception('Error al consultar la base de datos: ' . $wpdb->last_error);
             }
-            
-            error_log('Resultados de la consulta: ' . print_r($results, true));
             
             // Procesar los resultados
             $stats = [];
@@ -437,8 +436,6 @@ class GF_Task_Reports {
                     $step_id = $step->get_id();
                     $step_name = $step->get_name();
                     $step_type = $step->get_type();
-                    
-                    error_log("Procesando paso - ID: {$step_id}, Nombre: {$step_name}, Tipo: {$step_type}");
                     
                     $step_stats = null;
                     foreach ($results as $result) {
@@ -456,16 +453,13 @@ class GF_Task_Reports {
                         'avg_duration' => $step_stats ? round($step_stats->avg_duration, 1) : 0
                     );
                 } catch (Exception $e) {
-                    error_log("Error procesando paso {$step_id}: " . $e->getMessage());
+                    continue;
                 }
             }
             
-            error_log('Estadísticas procesadas: ' . print_r($stats, true));
             return $stats;
             
         } catch (Exception $e) {
-            error_log('Error en get_step_stats: ' . $e->getMessage());
-            error_log('Stack trace: ' . $e->getTraceAsString());
             throw $e;
         }
     }
@@ -479,42 +473,36 @@ class GF_Task_Reports {
      * @return array Estadísticas de tareas completadas y duración promedio por mes
      */
     private function get_monthly_stats($form_id, $period, $start_date = null, $end_date = null) {
-        error_log('=== INICIO get_monthly_stats ===');
-        error_log("Parámetros recibidos: form_id={$form_id}, period={$period}, start_date={$start_date}, end_date={$end_date}");
-        
         global $wpdb;
         
         try {
             // Construir la condición de fecha
             $date_condition = $this->build_date_condition($period, $start_date, $end_date);
-            error_log('Condición de fecha: ' . $date_condition);
             
             // Consulta para obtener estadísticas mensuales
             $query = $wpdb->prepare("
                 SELECT 
-                    DATE_FORMAT(date_created, '%Y-%m') as month,
-                    DATE_FORMAT(date_created, '%M %Y') as display_name,
+                    DATE_FORMAT(al.date_created, '%Y-%m') as month,
+                    DATE_FORMAT(al.date_created, '%M %Y') as display_name,
                     COUNT(*) as total_completed,
-                    ROUND(AVG(duration/3600), 2) as avg_duration
-                FROM {$wpdb->prefix}gravityflow_activity_log
-                WHERE log_object = 'workflow'
-                AND log_event = 'ended'
-                AND log_value IN ('complete', 'approved')
-                AND form_id = %d
+                    ROUND(AVG(al.duration/3600), 2) as avg_duration
+                FROM {$wpdb->prefix}gravityflow_activity_log al
+                INNER JOIN {$wpdb->prefix}gf_entry e ON al.lead_id = e.id
+                WHERE al.log_object = 'workflow'
+                AND al.log_event = 'ended'
+                AND al.log_value IN ('complete', 'approved', 'rejected')
+                AND e.status = 'active'
+                AND al.form_id = %d
                 {$date_condition}
-                GROUP BY DATE_FORMAT(date_created, '%Y-%m')
+                GROUP BY DATE_FORMAT(al.date_created, '%Y-%m')
                 ORDER BY month DESC
             ", $form_id);
             
-            error_log('Ejecutando query: ' . $query);
             $results = $wpdb->get_results($query);
             
             if ($wpdb->last_error) {
-                error_log('Error en la consulta SQL: ' . $wpdb->last_error);
                 throw new Exception('Error al consultar la base de datos: ' . $wpdb->last_error);
             }
-            
-            error_log('Resultados de la consulta: ' . print_r($results, true));
             
             // Procesar los resultados para traducir los nombres de los meses
             $meses = array(
@@ -547,12 +535,100 @@ class GF_Task_Reports {
                 );
             }
             
-            error_log('Estadísticas procesadas: ' . print_r($stats, true));
             return $stats;
             
         } catch (Exception $e) {
-            error_log('Error en get_monthly_stats: ' . $e->getMessage());
-            error_log('Stack trace: ' . $e->getTraceAsString());
+            throw $e;
+        }
+    }
+
+    /**
+     * Obtiene estadísticas de tareas pendientes por paso
+     * @param int $form_id ID del formulario
+     * @param string $period Período para filtrar
+     * @param string $start_date Fecha de inicio del filtro personalizado
+     * @param string $end_date Fecha de fin del filtro personalizado
+     * @return array Estadísticas de tareas pendientes por paso
+     */
+    private function get_pending_tasks_by_step($form_id, $period, $start_date = null, $end_date = null) {
+        global $wpdb;
+        $prefix = $this->get_table_prefix();
+        
+        try {
+            // Usar el alias 'a' para la tabla de actividad
+            $date_condition = $this->build_date_condition($period, $start_date, $end_date, 'a');
+
+            // Obtener los pasos del workflow
+            $api = new Gravity_Flow_API($form_id);
+            $steps = $api->get_steps();
+            
+            $query = $wpdb->prepare("
+                SELECT 
+                    a.feed_id AS step_id,
+                    COUNT(DISTINCT a.lead_id) AS total_tareas_pendientes
+                FROM {$prefix}gravityflow_activity_log a
+                INNER JOIN {$prefix}gf_entry e ON a.lead_id = e.id
+                WHERE a.form_id = %d 
+                AND a.log_object = 'assignee' 
+                AND a.log_event = 'status' 
+                AND a.log_value = 'pending'
+                AND e.status = 'active'
+                AND NOT EXISTS (
+                    SELECT 1 
+                    FROM {$prefix}gravityflow_activity_log step
+                    WHERE step.lead_id = a.lead_id
+                    AND (
+                        (step.log_object = 'step' 
+                         AND step.log_event = 'ended' 
+                         AND step.log_value = 'approved'
+                         AND step.date_created > a.date_created)
+                        OR
+                        (step.log_object = 'assignee'
+                         AND step.log_event = 'status'
+                         AND step.log_value IN ('complete', 'approved')
+                         AND step.date_created > a.date_created)
+                        OR
+                        (step.log_object = 'workflow' 
+                         AND (step.log_event = 'ended' OR step.log_event = 'sent_to_step')
+                         AND step.date_created > a.date_created)
+                    )
+                )
+                {$date_condition}
+                GROUP BY a.feed_id
+                ORDER BY a.feed_id
+            ", $form_id);
+            
+            $results = $wpdb->get_results($query);
+            
+            if ($wpdb->last_error) {
+                throw new Exception('Error al consultar la base de datos: ' . $wpdb->last_error);
+            }
+            
+            // Procesar los resultados y agregar información del paso
+            $stats = array();
+            foreach ($steps as $step) {
+                $step_id = $step->get_id();
+                $step_stats = null;
+                
+                // Buscar las estadísticas para este paso
+                foreach ($results as $result) {
+                    if ($result->step_id == $step_id) {
+                        $step_stats = $result;
+                        break;
+                    }
+                }
+                
+                $stats[] = array(
+                    'step_id' => $step_id,
+                    'display_name' => $step->get_name(),
+                    'step_type' => $step->get_type(),
+                    'total_tareas_pendientes' => $step_stats ? $step_stats->total_tareas_pendientes : 0
+                );
+            }
+            
+            return $stats;
+            
+        } catch (Exception $e) {
             throw $e;
         }
     }
@@ -563,9 +639,6 @@ class GF_Task_Reports {
      * @return void Envía respuesta JSON con las estadísticas
      */
     public function handle_workflow_stats() {
-        error_log('=== INICIO handle_workflow_stats ===');
-        error_log('POST recibido: ' . print_r($_POST, true));
-        
         // Verificar nonce
         check_ajax_referer('workflow_stats_nonce', 'nonce');
         
@@ -587,35 +660,26 @@ class GF_Task_Reports {
             $start_date = isset($_POST['start_date']) ? sanitize_text_field($_POST['start_date']) : null;
             $end_date = isset($_POST['end_date']) ? sanitize_text_field($_POST['end_date']) : null;
         }
-        error_log("Parámetros procesados: form_id={$form_id}, period={$period}, type={$type}");
-        error_log('[DEBUG] Valor de $period recibido en backend: ' . $period);
         
         if (!$form_id) {
-            error_log('Error: Formulario no válido');
             wp_send_json_error('Formulario no válido');
             return;
         }
         
         try {
             if ($type === 'paso') {
-                error_log('Obteniendo estadísticas de pasos');
                 $stats = $this->get_step_stats($form_id, $period, $start_date, $end_date);
             } elseif ($type === 'mensual') {
-                error_log('Obteniendo estadísticas mensuales');
                 $stats = $this->get_monthly_stats($form_id, $period, $start_date, $end_date);
+            } elseif ($type === 'tareas_pendientes_paso') {
+                $stats = $this->get_pending_tasks_by_step($form_id, $period, $start_date, $end_date);
             } else {
-                error_log('Obteniendo estadísticas de workflow');
                 $stats = $this->get_workflow_stats($period, $form_id, $start_date, $end_date);
             }
             
-            error_log('Estadísticas obtenidas: ' . print_r($stats, true));
             wp_send_json_success($stats);
         } catch (Exception $e) {
-            error_log('Error en handle_workflow_stats: ' . $e->getMessage());
-            error_log('Stack trace: ' . $e->getTraceAsString());
             wp_send_json_error($e->getMessage());
         }
-        
-        error_log('=== FIN handle_workflow_stats ===');
     }
 } 
